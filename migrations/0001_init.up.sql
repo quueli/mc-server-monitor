@@ -1,0 +1,7 @@
+CREATE TABLE servers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    host       TEXT      NOT NULL,
+    port       INTEGER   NOT NULL DEFAULT 25565,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (host, port)
+);
