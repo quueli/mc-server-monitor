@@ -1,0 +1,47 @@
+package mcping
+
+import "io"
+
+// Minecraft encodes integers as little-endian base-128 varints: seven data bits
+// per byte, high bit set while more bytes follow.
+
+func writeVarInt(w io.Writer, v int32) error {
+	var buf [5]byte
+	n := putVarInt(buf[:], v)
+	_, err := w.Write(buf[:n])
+	return err
+}
+
+func putVarInt(buf []byte, v int32) int {
+	u := uint32(v)
+	i := 0
+	for {
+		b := byte(u & 0x7f)
+		u >>= 7
+		if u != 0 {
+			b |= 0x80
+		}
+		buf[i] = b
+		i++
+		if u == 0 {
+			return i
+		}
+	}
+}
+
+func readVarInt(r io.ByteReader) (int32, error) {
+	var result uint32
+	var shift uint
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		result |= uint32(b&0x7f) << shift
+		if b&0x80 == 0 {
+			break
+		}
+		shift += 7
+	}
+	return int32(result), nil
+}
