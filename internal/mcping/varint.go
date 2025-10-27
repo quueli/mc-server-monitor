@@ -1,12 +1,19 @@
 package mcping
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // Minecraft encodes integers as little-endian base-128 varints: seven data bits
-// per byte, high bit set while more bytes follow.
+// per byte, high bit set while more bytes follow. A 32-bit value never needs
+// more than five bytes, so anything longer is a malformed stream.
+const maxVarIntBytes = 5
+
+var errVarIntTooLong = errors.New("mcping: varint longer than 5 bytes")
 
 func writeVarInt(w io.Writer, v int32) error {
-	var buf [5]byte
+	var buf [maxVarIntBytes]byte
 	n := putVarInt(buf[:], v)
 	_, err := w.Write(buf[:n])
 	return err
@@ -31,17 +38,15 @@ func putVarInt(buf []byte, v int32) int {
 
 func readVarInt(r io.ByteReader) (int32, error) {
 	var result uint32
-	var shift uint
-	for {
+	for i := 0; i < maxVarIntBytes; i++ {
 		b, err := r.ReadByte()
 		if err != nil {
 			return 0, err
 		}
-		result |= uint32(b&0x7f) << shift
+		result |= uint32(b&0x7f) << (7 * i)
 		if b&0x80 == 0 {
-			break
+			return int32(result), nil
 		}
-		shift += 7
 	}
-	return int32(result), nil
+	return 0, errVarIntTooLong
 }
