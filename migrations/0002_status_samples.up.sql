@@ -1,0 +1,9 @@
+CREATE TABLE status_samples (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   INTEGER   NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    online      BOOLEAN   NOT NULL DEFAULT 0,
+    players     INTEGER   NOT NULL DEFAULT 0,
+    max_players INTEGER   NOT NULL DEFAULT 0,
+    latency_ms  INTEGER   NOT NULL DEFAULT 0,
+    sampled_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
