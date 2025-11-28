@@ -10,22 +10,38 @@ import (
 	"time"
 )
 
-// naive fixed-window limiter: count requests per ip in the current minute and
-// reset when the window rolls over. bursty at the window edge, but simple.
-type limiter struct {
-	mu     sync.Mutex
-	counts map[string]int
-	window time.Time
-	limit  int
+type bucket struct {
+	tokens     int
+	lastRefill time.Time
 }
 
-func RateLimit(limit, _ int) func(http.Handler) http.Handler {
-	l := &limiter{counts: make(map[string]int), window: time.Now(), limit: limit}
+type limiter struct {
+	mu       sync.Mutex
+	visitors map[string]*bucket
+	rate     int // tokens added per minute
+	burst    int // bucket capacity
+}
+
+// RateLimit returns middleware that gives each client IP a token bucket: up to
+// burst requests immediately, then one more per (60/rate) seconds.
+func RateLimit(rate, burst int) func(http.Handler) http.Handler {
+	l := &limiter{
+		visitors: make(map[string]*bucket),
+		rate:     rate,
+		burst:    burst,
+	}
+	go l.cleanupLoop()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(l.limit))
-			if !l.allow(clientIP(r)) {
+			ip := clientIP(r)
+			ok, remaining, reset := l.allow(ip)
+
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(l.burst))
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+
+			if !ok {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
@@ -36,16 +52,44 @@ func RateLimit(limit, _ int) func(http.Handler) http.Handler {
 	}
 }
 
-func (l *limiter) allow(ip string) bool {
+func (l *limiter) allow(ip string) (bool, int, time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if time.Since(l.window) > time.Minute {
-		l.counts = make(map[string]int)
-		l.window = time.Now()
+	now := time.Now()
+	b, ok := l.visitors[ip]
+	if !ok {
+		l.visitors[ip] = &bucket{tokens: l.burst - 1, lastRefill: now}
+		return true, l.burst - 1, now.Add(time.Minute)
 	}
-	l.counts[ip]++
-	return l.counts[ip] <= l.limit
+
+	if refill := int(now.Sub(b.lastRefill).Minutes() * float64(l.rate)); refill > 0 {
+		b.tokens += refill
+		if b.tokens > l.burst {
+			b.tokens = l.burst
+		}
+		b.lastRefill = now
+	}
+
+	if b.tokens <= 0 {
+		return false, 0, b.lastRefill.Add(time.Minute)
+	}
+	b.tokens--
+	return true, b.tokens, now.Add(time.Minute)
+}
+
+func (l *limiter) cleanupLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.mu.Lock()
+		for ip, b := range l.visitors {
+			if time.Since(b.lastRefill) > 5*time.Minute {
+				delete(l.visitors, ip)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func clientIP(r *http.Request) string {
