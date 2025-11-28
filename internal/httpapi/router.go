@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/quueli/mc-server-monitor/internal/mcping"
 	"github.com/quueli/mc-server-monitor/internal/monitor"
 	"github.com/quueli/mc-server-monitor/internal/store"
 )
@@ -19,10 +21,13 @@ func NewAPI(st store.Store, p *monitor.Poller) *API {
 	return &API{store: st, poller: p}
 }
 
+// Handler builds the router and the middleware chain. The two api routes carry
+// their own per-IP limits; the status check is heavier so it gets a tighter one.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
-	mux.HandleFunc("GET /api/servers", a.listServers)
+	mux.Handle("GET /api/servers", RateLimit(60, 60)(http.HandlerFunc(a.listServers)))
+	mux.Handle("GET /api/ping", RateLimit(10, 10)(http.HandlerFunc(a.ping)))
 	return logRequests(mux)
 }
 
@@ -37,6 +42,41 @@ func (a *API) listServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, servers)
+}
+
+func (a *API) ping(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	if host == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("host is required"))
+		return
+	}
+
+	port := mcping.DefaultPort
+	if raw := r.URL.Query().Get("port"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 65535 {
+			writeJSON(w, http.StatusBadRequest, errorBody("invalid port"))
+			return
+		}
+		port = n
+	}
+
+	status, err := a.poller.PingNow(host, port)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, errorBody("server unreachable"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"host":        host,
+		"port":        port,
+		"online":      true,
+		"players":     status.Players.Online,
+		"max_players": status.Players.Max,
+		"version":     status.Version.Name,
+		"motd":        status.MOTD.Clean(),
+		"latency_ms":  status.LatencyMS,
+		"favicon":     status.Favicon != "",
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
