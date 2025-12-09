@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// MemStore keeps servers and samples in memory. It is the default store for the
+// demo, so the server runs with no database.
 type MemStore struct {
 	mu      sync.RWMutex
 	nextID  int64
@@ -65,6 +67,13 @@ func (m *MemStore) UpdateStatus(_ context.Context, serverID int64, st Status) er
 	s.Online = st.Online
 	s.Players = st.Players
 	s.MaxPlayers = st.MaxPlayers
+	if st.Version != "" {
+		s.Version = st.Version
+	}
+	if st.MOTD != "" {
+		s.MOTD = st.MOTD
+	}
+	s.LastCheck = time.Now()
 	return nil
 }
 
@@ -96,7 +105,19 @@ func (m *MemStore) RecentSamples(_ context.Context, serverID int64, since time.T
 	return out, nil
 }
 
-// TODO: actually drop old samples
-func (m *MemStore) PruneSamples(_ context.Context, _ time.Time) (int64, error) {
-	return 0, nil
+func (m *MemStore) PruneSamples(_ context.Context, before time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	kept := m.samples[:0]
+	var removed int64
+	for _, s := range m.samples {
+		if s.At.Before(before) {
+			removed++
+			continue
+		}
+		kept = append(kept, s)
+	}
+	m.samples = kept
+	return removed, nil
 }
