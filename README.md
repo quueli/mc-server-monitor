@@ -1,5 +1,7 @@
 # mc-server-monitor
 
+![ci](https://github.com/quueli/mc-server-monitor/actions/workflows/ci.yml/badge.svg)
+
 pings minecraft servers and keeps a short history of players online / latency, with a small http api on top. go, stdlib only.
 
     MONITOR_SERVERS=play.hypixel.net,mc.example.com go run ./cmd/server
